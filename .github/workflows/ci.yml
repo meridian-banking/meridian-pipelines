@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.5.0
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+
+  test:
+    # The DQ checks are pure functions over DataFrames, so no database needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  dq-rules-valid:
+    # DQ rules are data, edited by analysts. A malformed rule file must fail
+    # here rather than at 3am in production.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
+      - name: Validate dq_rules.yaml structure
+        run: |
+          python - <<'PY'
+          import sys, yaml
+          VALID_TYPES = {"completeness","uniqueness","validity","referential","freshness","volume"}
+          VALID_SEVERITY = {"ERROR","WARN"}
+          rules = yaml.safe_load(open("config/dq_rules.yaml"))
+          errors = []
+          for name, ds in (rules.get("datasets") or {}).items():
+              for i, c in enumerate(ds.get("checks", [])):
+                  if c.get("type") not in VALID_TYPES:
+                      errors.append(f"{name}[{i}]: bad type {c.get('type')!r}")
+                  if c.get("severity", "ERROR") not in VALID_SEVERITY:
+                      errors.append(f"{name}[{i}]: bad severity {c.get('severity')!r}")
+                  if c.get("type") == "uniqueness" and not c.get("columns"):
+                      errors.append(f"{name}[{i}]: uniqueness needs 'columns'")
+                  if c.get("type") in {"completeness","validity","referential","freshness"} and not c.get("column"):
+                      errors.append(f"{name}[{i}]: {c['type']} needs 'column'")
+          if errors:
+              print("\n".join(errors)); sys.exit(1)
+          n = sum(len(d.get("checks", [])) for d in rules["datasets"].values())
+          print(f"all {n} rules valid across {len(rules['datasets'])} datasets")
+          PY
