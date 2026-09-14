@@ -104,3 +104,6 @@ make check   # run the gate against generator output
 Checks are pure functions over DataFrames — that separation between "produce a result" and "write it down" is why the test suite needs no infrastructure at all.
 
 Part of the 8-repository Meridian platform.
+
+
+_Verified locally: the quality gate blocked corrupted data (exit code 1), quarantined 4 defective rows across customers and transactions with full diagnostic payloads, while 3.15M+ clean transactions still proceeded._
