@@ -1,0 +1,211 @@
+# =============================================================================
+# MERIDIAN DATA QUALITY RULES
+# =============================================================================
+# Rules are DATA, not code. An analyst or data steward can review and change
+# these in a pull request without touching Python.
+#
+# SEVERITY GUIDANCE (the judgement call this whole file encodes):
+#   ERROR — a downstream NUMBER would be wrong. Block the load, quarantine rows.
+#   WARN  — a human should look, but the arithmetic still holds. Log and proceed.
+#
+# The temptation is to mark everything ERROR "to be safe". Resist it: a pipeline
+# that halts nightly on trivia gets bypassed, and a control everyone bypasses is
+# worse than no control because it manufactures false confidence.
+# =============================================================================
+
+datasets:
+
+  customers:
+    description: Bank customers. The dimension everything else hangs off.
+    checks:
+      # Identity must be present and unique — a duplicate customer would
+      # multiply every joined fact, silently inflating totals.
+      - type: completeness
+        column: customer_id
+        severity: ERROR
+
+      - type: uniqueness
+        columns: [customer_id]
+        severity: ERROR
+
+      - type: validity
+        column: customer_id
+        pattern: "^CUST_[0-9]{8}$"
+        severity: ERROR
+
+      # Credit score drives risk models. Out-of-range values would corrupt them.
+      - type: validity
+        column: credit_score
+        min: 300
+        max: 850
+        severity: ERROR
+
+      - type: validity
+        column: dti
+        min: 0
+        max: 1
+        severity: ERROR
+
+      # Segment drives reporting cuts. An unknown segment produces a phantom
+      # category on every dashboard.
+      - type: validity
+        column: segment
+        allowed: [mass, affluent, private]
+        severity: ERROR
+
+      # Income missing is bad but not arithmetic-breaking: reports can exclude
+      # nulls explicitly. WARN, with a small tolerance.
+      - type: completeness
+        column: annual_income
+        max_null_pct: 0.01
+        severity: WARN
+
+      # Age outside this range is implausible but harms no total directly.
+      - type: validity
+        column: age
+        min: 18
+        max: 120
+        severity: WARN
+
+      - type: volume
+        tolerance_pct: 30
+        min_rows: 1
+        severity: WARN
+
+  accounts:
+    description: Deposit and credit accounts held by customers.
+    checks:
+      - type: completeness
+        column: account_id
+        severity: ERROR
+
+      - type: uniqueness
+        columns: [account_id]
+        severity: ERROR
+
+      # An account whose customer does not exist would vanish on every inner
+      # join — silent data loss, the worst failure mode in analytics.
+      - type: referential
+        column: customer_id
+        parent: customer
+        severity: ERROR
+
+      - type: validity
+        column: product_type
+        allowed: [checking, savings, cd, money_market, credit_card]
+        severity: ERROR
+
+      - type: validity
+        column: apr
+        min: 0
+        max: 1
+        severity: ERROR
+
+      - type: volume
+        tolerance_pct: 30
+        severity: WARN
+
+  transactions:
+    description: The largest fact feed. Every row is money movement.
+    checks:
+      - type: completeness
+        column: transaction_id
+        severity: ERROR
+
+      - type: uniqueness
+        columns: [transaction_id]
+        severity: ERROR
+
+      # Orphaned transactions are the single most dangerous defect here: they
+      # do not error, they disappear, and revenue reports are quietly short.
+      - type: referential
+        column: account_id
+        parent: account
+        severity: ERROR
+
+      # Amount must be present and non-negative. A null or negative amount
+      # would corrupt every SUM in the warehouse.
+      - type: completeness
+        column: amount
+        severity: ERROR
+
+      - type: validity
+        column: amount
+        min: 0
+        severity: ERROR
+
+      - type: validity
+        column: merchant_category
+        allowed:
+          [grocery, restaurant, gas, retail, online, utilities,
+           travel, healthcare, entertainment, atm_withdrawal]
+        severity: ERROR
+
+      - type: validity
+        column: channel
+        allowed: [in_person, online]
+        severity: ERROR
+
+      # A stale transaction feed means an upstream job stopped running. Nothing
+      # about the rows is wrong — they are simply the wrong day's rows.
+      - type: freshness
+        column: timestamp
+        max_age_hours: 48
+        severity: WARN
+
+      # The check that catches a silently truncated export, where every single
+      # row is immaculate but 90% of them are missing.
+      - type: volume
+        tolerance_pct: 40
+        min_rows: 100
+        severity: ERROR
+
+  loans:
+    description: Amortizing loans. Feeds credit risk reporting.
+    checks:
+      - type: completeness
+        column: loan_id
+        severity: ERROR
+
+      - type: uniqueness
+        columns: [loan_id]
+        severity: ERROR
+
+      - type: referential
+        column: customer_id
+        parent: customer
+        severity: ERROR
+
+      - type: validity
+        column: principal
+        min: 0
+        severity: ERROR
+
+      - type: validity
+        column: apr
+        min: 0
+        max: 1
+        severity: ERROR
+
+      - type: validity
+        column: term_months
+        min: 1
+        max: 480
+        severity: ERROR
+
+      # Score at origination is the point-in-time value the whole SCD2 design
+      # exists to preserve. Garbage here corrupts fair-lending analysis.
+      - type: validity
+        column: credit_score_at_origination
+        min: 300
+        max: 850
+        severity: ERROR
+
+      - type: validity
+        column: loan_type
+        allowed: [auto, mortgage, personal, student]
+        severity: ERROR
+
+      - type: volume
+        tolerance_pct: 40
+        severity: WARN
