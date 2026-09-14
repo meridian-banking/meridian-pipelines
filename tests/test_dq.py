@@ -11,7 +11,6 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
-
 from meridian_pipelines.dq.checks import (
     check_completeness,
     check_freshness,
